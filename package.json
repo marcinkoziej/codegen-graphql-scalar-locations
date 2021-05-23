@@ -32,6 +32,7 @@
   },
   "name": "codegen-graphql-scalar-locations",
   "author": "Marcin Koziej",
+  "homepage": "https://github.com/marcinkoziej/codegen-graphql-scalar-locations",
   "module": "dist/codegen-graphql-scalar-locations.esm.js",
   "size-limit": [
     {
