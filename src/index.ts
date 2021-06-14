@@ -12,8 +12,22 @@ export const plugin = (schema: GraphQLSchema, _documents : any, config: Config) 
   const locations = scalarLocations(intro, config.scalars)
 
   return `
-export type Node = { [key: string]: Node | string };
-export const scalarLocations : Record<string,Node> = ${JSON.stringify(locations, null, 2)};
+export type ObjectFieldTypes = {
+    [key: string]: { [key: string]: string | string[] }
+};
+
+export type OpTypes = {
+    [key: string]: string | string[]
+};
+
+export type ScalarLocations = {
+ scalars: string[],
+ inputObjectFieldTypes: ObjectFieldTypes;
+ outputObjectFieldTypes: ObjectFieldTypes;
+ operationMap: OpTypes;
+};
+
+export const scalarLocations : ScalarLocations = ${JSON.stringify({...locations, scalars: config.scalars} , null, 2)};
 `;
 };
 

@@ -1,3 +1,4 @@
+import _ from 'lodash';
 import {
   IntrospectionInputTypeRef,
   IntrospectionTypeRef,
@@ -5,15 +6,31 @@ import {
   IntrospectionInputObjectType,
   IntrospectionType,
   IntrospectionObjectType,
+  IntrospectionInterfaceType,
 } from "graphql";
 
+/* 
+ v2:
+ - different strategy: store input / output types that can have scalars of interest
+ - they they can be tree-walked on runtime
+ */
+/*
 type FieldPath = {
   type: string;
   fieldType: string;
   path: string[];
 };
+*/
 
-type Node = {[key:string]: Node | string};
+type ObjectFieldTypes = {
+  [key: string]: { [key: string]: string | string[] }
+};
+
+type OpTypes = {
+  [key: string]: string | string[]
+}
+
+// type Node = {[key:string]: Node | string};
 
 const scalarLocations = (
   introspectionQuery: IntrospectionQuery,
@@ -44,81 +61,91 @@ const scalarLocations = (
       {}
     );
 
-  const inputFieldPaths: FieldPath[] = scalars.map(type => ({type: type, fieldType: type, path: []}));
-  const outputFieldPaths: FieldPath[] = [];
 
-  const searchInputScalars = (
-    type: string,
-    current: IntrospectionInputObjectType,
-    path: string[]
-  ) => {
-    for (const field of current.inputFields) {
+  const interfaceTypes = introspectionQuery.__schema.types
+    .filter(({ kind }) => kind === "INTERFACE")
+    .reduce(
+      (a: Record<string, IntrospectionInterfaceType>, x: IntrospectionType) => {
+        a[x.name] = x as IntrospectionInterfaceType;
+        return a;
+      },
+      {}
+    );
+
+
+  /* Input Object types */
+
+  const inputObjectFieldTypes: ObjectFieldTypes = {}; // _.fromPairs(scalars.map(type => [type, type]));
+
+  for (const name in inputTypes) {
+    const typeInfo: IntrospectionInputObjectType = inputTypes[name];
+    const typeMap: { [key: string]: string } = {};
+
+    for (const field of typeInfo.inputFields) {
       const fieldType = unpackInputType(field.type);
 
       if (fieldType === undefined) continue; // ENUMs, others?
 
       if (fieldType.kind === "SCALAR" && wantedScalar(fieldType.name)) {
-        inputFieldPaths.push({
-          type: type,
-          fieldType: fieldType.name,
-          path: path.concat([field.name]),
-        });
+        typeMap[field.name] = fieldType.name
       } else if (fieldType.kind === "INPUT_OBJECT") {
-        searchInputScalars(
-          type,
-          inputTypes[fieldType.name],
-          path.concat([field.name])
-        );
+        typeMap[field.name] = fieldType.name
       }
     }
-  };
 
-  const searchOutputScalars = (
-    type: string,
-    current: IntrospectionObjectType,
-    path: string[]
-  ) => {
-    if (path.length > 16) return; // dumb loop protection
+    if (!_.isEmpty(typeMap))
+      inputObjectFieldTypes[name] = typeMap;
+  }
 
-    for (const field of current.fields) {
+  /* OUTPUT: split between objects and operation type */
+  function getObjectFieldTypes(typeInfo: IntrospectionObjectType) {
+    const typeMap: { [key: string]: string | string[] } = {};
+
+    for (const field of typeInfo.fields) {
       const fieldType = unpackOutputType(field.type);
-
       if (fieldType === undefined) continue; // ENUMs, others?
+
       if (fieldType.kind === "OBJECT" && fieldType.name.startsWith("__"))
         continue;
 
       if (fieldType.kind === "SCALAR" && wantedScalar(fieldType.name)) {
-        outputFieldPaths.push({
-          type: type,
-          fieldType: fieldType.name,
-          path: path.concat([field.name]),
-        });
+        typeMap[field.name] = fieldType.name;
       } else if (fieldType.kind === "OBJECT") {
-        searchOutputScalars(
-          type,
-          outputTypes[fieldType.name],
-          path.concat([field.name])
-        );
+        typeMap[field.name] = fieldType.name;
+      } else if (fieldType.kind === "INTERFACE") {
+        const iface = interfaceTypes[fieldType.name];
+        typeMap[field.name] = iface.possibleTypes.map(t => t.name)
       }
     }
-  };
 
-  for (const name in inputTypes) {
-    searchInputScalars(name, inputTypes[name], []);
+    return typeMap;
   }
+
+  const outputObjectFieldTypes: ObjectFieldTypes = {};
+  const operationMap: OpTypes = {};
+
 
   for (const name in outputTypes) {
     if (name === "RootMutationType" || name === "RootQueryType") {
-      searchOutputScalars(name, outputTypes[name], []);
+      const rootType = outputTypes[name];
+
+      Object.assign(operationMap, getObjectFieldTypes(rootType));
+    } else {
+      const objectType = outputTypes[name]
+
+      if (name.startsWith("__")) continue; // __Schema, __Type, and other metadatas
+      const fields = getObjectFieldTypes(objectType);
+      if (!_.isEmpty(fields))
+        outputObjectFieldTypes[name] = fields;
     }
   }
 
-  const inputScalars = makeTree(inputFieldPaths, true);
-  const outputScalars = makeTree(outputFieldPaths, false);
 
-  return { inputScalars, outputScalars };
+
+  return { inputObjectFieldTypes, outputObjectFieldTypes, operationMap };
 };
 
+/*
 const makeTree = (paths : FieldPath[], includeTypeName : boolean) => {
   const scalarTree : Node = {}
 
@@ -141,6 +168,8 @@ const makeTree = (paths : FieldPath[], includeTypeName : boolean) => {
   }
   return scalarTree;
 }
+*/
+
 
 const unpackInputType = (
   type: IntrospectionInputTypeRef
@@ -150,18 +179,18 @@ const unpackInputType = (
   if (type.kind === "LIST" || type.kind === "NON_NULL")
     return unpackInputType(type.ofType);
 
-  return 
+  return
 };
 
 const unpackOutputType = (
   type: IntrospectionTypeRef
 ): IntrospectionTypeRef | undefined => {
-  if (type.kind === "SCALAR" || type.kind === "OBJECT") return type;
+  if (type.kind === "SCALAR" || type.kind === "OBJECT" || type.kind === "INTERFACE") return type;
 
   if (type.kind === "LIST" || type.kind === "NON_NULL")
     return unpackOutputType(type.ofType);
 
-  return 
+  return
 };
 
 
